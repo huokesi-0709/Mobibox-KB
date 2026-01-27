@@ -82,7 +82,7 @@ def main():
         data = extract_json(raw)
 
         if not isinstance(data, dict) or "标签体系" not in data:
-            print("      [WARN] 输出不是预期结构，跳过本批次")
+            print("      [WARN] 输出不是预期结构，跳过本批次 ")
             continue
 
         items = data["标签体系"]
