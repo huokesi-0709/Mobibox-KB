@@ -1,0 +1,14 @@
+{
+  "version": "1.0",
+  "preset": "medium",
+  "score_range": [0, 5],
+  "weights": {
+    "w_quality": 0.015,
+    "w_enabled": 0.005
+  },
+  "notes": [
+    "distance 越小越相关，重排通过减小 distance 实现提权",
+    "w_quality 中等强度：满分(5)最多减 0.015",
+    "w_enabled 为启用态额外加成，候选不加成，停用会被过滤"
+  ]
+}

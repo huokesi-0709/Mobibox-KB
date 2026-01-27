@@ -1,27 +1,3 @@
-"""
-query_demo.py（评分重排版）
-
-关键修复：
-- sqlite-vec 的 vec0 KNN 查询在某些情况下（尤其 JOIN 时）要求显式提供 k 约束：
-  WHERE embedding MATCH :qvec AND k = :k
-- 所以我们把 KNN 搜索放到 CTE 子查询里，再 JOIN chunks 表做过滤/展示。
-
-运行：
-  python -m scripts.query_demo --q "我好害怕，喘不过气" --topk 5
-  python -m scripts.query_demo --q "我腿被压住了，发麻动不了" --dimension "核心生理病理学" --topk 8
-  python -m scripts.query_demo --q "又在晃，是不是余震" --tags scn_aftershock --topk 5
-
-参数说明：
-- --q            必填：查询文本
-- --topk         返回多少条
-- --dimension    可选：限定维度
-- --risk         可选：限定风险等级（逗号分隔，如 "中,高"）
-- --tags         可选：必须包含的标签ID（逗号分隔，如 "psy_panic,act_breath_pacing"）
-- --status       可选：限定状态（逗号分隔），默认排除“停用”
-"""
-
-
-
 import argparse
 import sqlite3
 import struct
@@ -33,6 +9,7 @@ from monibox_kb.config import settings
 from monibox_kb.paths import PROJECT_ROOT
 from monibox_kb.embedding import embed_texts
 from monibox_kb.scoring.rerank import RerankPolicy, final_distance
+from monibox_kb.routing.router import AutoRouter
 
 
 def vec_to_f32_blob(vec: List[float]) -> sqlite3.Binary:
@@ -64,27 +41,46 @@ def main():
     parser.add_argument("--risk", default=None, help="限定风险等级（可选，逗号分隔）")
     parser.add_argument("--tags", default=None, help="必须包含的标签ID（可选，逗号分隔）")
     parser.add_argument("--status", default=None, help="限定状态（可选，逗号分隔），默认排除停用")
-    parser.add_argument("--pool_mult", type=int, default=8, help="候选池倍率（用于重排），默认8")
+    parser.add_argument("--pool_mult", type=int, default=8, help="候选池倍率（默认8，用于评分重排）")
+
+    # 新增：自动路由
+    parser.add_argument("--auto_route", action="store_true", help="自动推断 dimension/tags（若未手动指定）")
+    parser.add_argument("--auto_top_tags", type=int, default=1, help="自动路由选取的标签数量（默认1）")
+
     args = parser.parse_args()
 
     policy = RerankPolicy.load_default()
 
     db_path = settings.rag_db_path
-    print("==== query_demo (rerank) ====")
+    print("==== query_demo (rerank + auto_route) ====")
     print("[info] project root:", PROJECT_ROOT)
     print("[info] db path:", db_path)
     print("[info] query:", args.q)
     print("[info] policy:", policy)
     print()
 
-    # 1) embedding
+    # 1) auto route（仅当用户没手动指定 dimension/tags 时）
+    if args.auto_route and (args.dimension is None or args.tags is None):
+        router = AutoRouter()
+        rr = router.route(args.q, top_tags=args.auto_top_tags)
+        print("[route] predicted dimension:", rr.dimension)
+        print("[route] predicted tags:", rr.tags)
+        print("[route] evidence:", rr.evidence)
+        print()
+
+        if args.dimension is None:
+            args.dimension = rr.dimension
+        if args.tags is None and rr.tags:
+            # 只用路由出的标签做过滤
+            args.tags = ",".join(rr.tags)
+
+    # 2) embedding
     qvec = embed_texts([args.q])[0]
     qblob = vec_to_f32_blob(qvec)
 
-    # 2) open db
+    # 3) open db
     conn = open_db(db_path)
 
-    # 3) filters on chunks
     where = []
     params = {}
 
@@ -112,20 +108,20 @@ def main():
             keys.append(f":{k}")
         where.append(f"c.risk IN ({','.join(keys)})")
 
+    # 注意：这里 tags 用 OR 逻辑（任意命中一个标签即可），更适合路由结果
     if args.tags:
         tags = parse_csv(args.tags)
+        ors = []
         for i, t in enumerate(tags):
             k = f"t{i}"
             params[k] = f"%|{t}|%"
-            where.append(f"c.tags_flat LIKE :{k}")
+            ors.append(f"c.tags_flat LIKE :{k}")
+        where.append("(" + " OR ".join(ors) + ")")
 
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
-    # 4) candidate pool
     topk = int(args.topk)
-    k_pool = max(topk, topk * int(args.pool_mult))
-    # 防止太大（调试用）
-    k_pool = min(k_pool, 300)
+    k_pool = min(max(topk, topk * int(args.pool_mult)), 300)
 
     sql = f"""
     WITH knn AS (
@@ -162,7 +158,7 @@ def main():
         print("No results.")
         return
 
-    # 5) rerank in python
+    # rerank
     scored = []
     for r in rows:
         d = float(r["distance"])

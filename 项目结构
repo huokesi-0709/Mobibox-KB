@@ -1,0 +1,65 @@
+MoniBox-KB/
+  README.md
+  requirements.txt
+  .env
+  .env.example
+  .gitignore
+
+  build/                         # 构建产物（可删可重建）
+    rag.db
+    runtime_pack.json
+
+  docs/                          # 文档（长期资产）
+    01_knowledgebase_roadmap.md
+    02_radxa_deploy_and_hardware_integration.md
+
+  knowledge_src/                 # 编辑源（长期资产）+ 中间产物（可删可重建）
+    00_meta.json
+    01_sources.json
+    generated/
+      02_meta_candidates.json
+      02_meta_candidates.normalized.json
+      11_qa_synth.json
+      12_chunks_synth.json
+      ...debug...
+
+  models/                        # 本地模型（不建议进git）
+    embedding/
+      bge-small-zh-v1.5/
+
+  scoring_system/                # 评分系统配置与文档（长期资产）
+    policy.json
+    README.md
+
+  sql/
+    schema.sql
+
+  monibox_kb/                    # 核心库（长期资产）
+    __init__.py
+    paths.py
+    config.py
+    deepseek_client.py
+    utils_json.py
+    text_clean.py
+    chunking.py
+    dedup.py
+    embedding.py
+    db_sqlitevec.py
+    scoring/
+      __init__.py
+      rerank.py
+    tags/                        # （新增）标签收敛模块
+      __init__.py
+      registry.py
+
+  scripts/                       # 运行入口（命令行工具）
+    __init__.py
+    generate_taxonomy.py
+    normalize_taxonomy.py
+    generate_qa.py
+    qa_to_chunks.py
+    build_pack.py
+    query_demo.py
+    rate_chunk.py
+    test_sqlitevec.py
+    cleanup_generated.py

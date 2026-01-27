@@ -1,19 +1,3 @@
-"""
-qa_to_chunks.py（最终稳健版）
-
-目的：
-- 将 QA 的“回答/答案/回复/解答”切成 60 字原子片段（TTS友好）
-- 自动添加来源/状态/评分/指纹
-- 重点修复：片段ID重复问题
-  原因：QA 里的 qa_id 可能是 1、2、3... 且会重复
-  解决：为每条 QA 生成稳定且唯一的 片段组ID(qa_gid)，并在片段ID中加入指纹短码
-
-输出：
-- knowledge_src/generated/12_chunks_synth.json
-如有坏条目（缺回答等）：
-- knowledge_src/generated/11_qa_synth.bad.json
-"""
-
 import json
 import re
 import hashlib
@@ -25,11 +9,11 @@ from monibox_kb.text_clean import clean_text
 from monibox_kb.dedup import sha256_fp
 from monibox_kb.paths import GENERATED_DIR as GEN
 
+from monibox_kb.tags.registry import TagRegistry
+
 OUT_PATH = GEN / "12_chunks_synth.json"
 BAD_QA_PATH = GEN / "11_qa_synth.bad.json"
 
-
-# ========= 可读ID辅助：维度/来源/标签短名 =========
 
 def dim_short(dim: str) -> str:
     m = {
@@ -59,14 +43,12 @@ def tag_short(tag_id: str) -> str:
     return parts[-1] if parts else "tag"
 
 
-# ========= key 归一化（避免 “回答：” 这种） =========
-
 def normalize_key(k: str) -> str:
     if not isinstance(k, str):
         return str(k)
     k = k.strip()
-    k = re.sub(r"[：:]\s*$", "", k)  # 去尾部冒号
-    k = re.sub(r"\s+", "", k)       # 去全部空白
+    k = re.sub(r"[：:]\s*$", "", k)
+    k = re.sub(r"\s+", "", k)
     return k
 
 
@@ -101,18 +83,11 @@ def pick_answer(it: Dict[str, Any]) -> str:
     return ""
 
 
-# ========= 关键：为每条QA生成稳定且唯一的 片段组ID =========
-
 def make_qa_gid(it: Dict[str, Any], idx: int) -> str:
-    """
-    生成片段组ID（qa_gid），保证唯一且尽量稳定：
-    - 不相信 it['qa_id']（可能是 1,2,3 且重复）
-    - 用 idx + (问题+回答) 的 hash 生成
-    """
     q = it.get("问题", "")
     a = pick_answer(it)
     base = f"{idx}||{str(q)}||{str(a)}".encode("utf-8", errors="ignore")
-    h = hashlib.sha1(base).hexdigest()[:10]  # 10位足够避免冲突
+    h = hashlib.sha1(base).hexdigest()[:10]
     return f"qa_{idx:05d}_{h}"
 
 
@@ -122,8 +97,6 @@ def main():
         raise FileNotFoundError("缺少 11_qa_synth.json，请先运行 scripts/generate_qa.py")
 
     raw = json.loads(qa_path.read_text(encoding="utf-8"))
-
-    # 兼容 {"data":[...]}
     if isinstance(raw, dict) and "data" in raw and isinstance(raw["data"], list):
         qa_list = raw["data"]
     else:
@@ -131,6 +104,9 @@ def main():
 
     if not isinstance(qa_list, list):
         raise ValueError("11_qa_synth.json 结构不对：根不是数组（或 dict.data 数组）")
+
+    # === 新增：加载 TagRegistry（包含 alias_map） ===
+    reg = TagRegistry.load()
 
     chunks = []
     bad_items = []
@@ -140,40 +116,36 @@ def main():
 
         answer = pick_answer(it)
         if not answer:
-            bad_items.append({
-                "__index": idx,
-                "__reason": "missing_answer_field",
-                "__keys": list(it.keys()),
-                "__item": it0
-            })
+            bad_items.append({"__index": idx, "__reason": "missing_answer_field", "__keys": list(it.keys()), "__item": it0})
             continue
 
         answer = clean_text(answer)
         atoms = split_by_max_chars(answer, settings.chunk_max_chars, settings.chunk_min_chars)
         if not atoms:
-            bad_items.append({
-                "__index": idx,
-                "__reason": "empty_answer_after_clean_or_split",
-                "__keys": list(it.keys()),
-                "__item": it0
-            })
+            bad_items.append({"__index": idx, "__reason": "empty_answer_after_clean_or_split", "__keys": list(it.keys()), "__item": it0})
             continue
 
-        # 召回词 + 问题（提高命中）
         recall_terms = set(to_list(it.get("召回词")))
         q = it.get("问题")
         if isinstance(q, str) and q.strip():
             recall_terms.add(q.strip())
 
-        # 不再使用 it['qa_id'] 来生成片段ID，避免重复
         qa_gid = make_qa_gid(it, idx)
 
-        # 元字段
         dim = it.get("维度", "动态心理认知状态")
         risk = it.get("风险等级", "中")
         pops = to_list(it.get("适用人群"))
-        tags = to_list(it.get("标签"))
-        primary_tag = tags[0] if tags else "tag_unknown"
+
+        # === 新增：标签收敛（alias + canonicalize）===
+        raw_tags = to_list(it.get("标签"))
+        tags = reg.canonicalize_list(raw_tags)
+
+        # 如果 tags 为空：说明这条 QA 的标签完全无法归一，直接跳过（防止脏数据入库）
+        if not tags:
+            bad_items.append({"__index": idx, "__reason": "tags_not_canonicalizable", "__raw_tags": raw_tags, "__item": it0})
+            continue
+
+        primary_tag = tags[0]
 
         src_id = it.get("来源ID", "src_synth_deepseek_v1")
         status = it.get("状态", "候选")
@@ -181,21 +153,17 @@ def main():
         safety_tip = it.get("安全提示", it.get("__安全提示", ""))
 
         for i, atom in enumerate(atoms):
-            fp = sha256_fp(atom)                 # sha256:xxxx
-            fp8 = fp.split(":")[1][:8]           # 指纹短码
+            fp = sha256_fp(atom)
+            fp8 = fp.split(":")[1][:8]
 
-            # 机器唯一ID：加入 qa_gid + 指纹短码，彻底避免重复
             chunk_id = f"k_{qa_gid}_{i:02d}_{fp8}"
-
-            # 人类可读ID：方便测试人员点名（不要求唯一，但我们也让它基本唯一）
-            # 示例：k_synth_psy_panic_9106c91e_00
             display_id = f"k_{source_short(src_id)}_{dim_short(dim)}_{tag_short(primary_tag)}_{fp8}_{i:02d}"
 
             chunk = {
                 "类型": "知识片段",
-                "片段ID": chunk_id,       # 数据库主键（必须唯一）
-                "显示ID": display_id,     # 测试/日志用（好认）
-                "片段组ID": qa_gid,       # 同一条QA切分后的组ID
+                "片段ID": chunk_id,
+                "显示ID": display_id,
+                "片段组ID": qa_gid,
 
                 "维度": dim,
                 "子主题": it.get("子主题"),

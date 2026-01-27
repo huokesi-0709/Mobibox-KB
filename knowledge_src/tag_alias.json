@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "aliases": {
+    "psy_panic": ["psy_psychological_panic_attack"],
+    "act_breath_pacing": ["act_intervention_breathing_guidance"],
+    "scn_aftershock": ["sec_secondary_hazard_aftershock"],
+
+    "med_crush": [
+      "med_medical_crush_syndrome_risk",
+      "med_medical_crush_injury",
+      "med_medical_crush_injury_risk"
+    ]
+  },
+  "notes": [
+    "value 可以是数组，系统会选择第一个存在于 taxonomy 的 tag_id",
+    "如果 med_crush 的目标 tag 你 taxonomy 中名字不同，请把它改成真实存在的那个"
+  ]
+}
