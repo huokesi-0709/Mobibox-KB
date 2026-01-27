@@ -70,7 +70,7 @@ def main():
     tag_preview = tag_ids[:280]  # 防止 prompt 过长
 
     target_total = 40     # 你要多少条 QA
-    batch_size = 12       # 每批生成多少（10~20比较稳）
+    batch_size = 15       # 每批生成多少（10~20比较稳）
     max_batches = 20      # 最多批次数，防止无限循环
 
     cli = DeepSeekClient()

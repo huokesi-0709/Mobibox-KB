@@ -45,7 +45,7 @@ def main():
     dims = meta["枚举"]["五维度"]
 
     target_total = 120
-    batch_size = 20
+    batch_size = 15
     max_batches = 20
 
     cli = DeepSeekClient()
