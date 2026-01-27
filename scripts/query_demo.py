@@ -1,5 +1,5 @@
 """
-query_demo.py（修复版）
+query_demo.py（评分重排版）
 
 关键修复：
 - sqlite-vec 的 vec0 KNN 查询在某些情况下（尤其 JOIN 时）要求显式提供 k 约束：
@@ -20,6 +20,8 @@ query_demo.py（修复版）
 - --status       可选：限定状态（逗号分隔），默认排除“停用”
 """
 
+
+
 import argparse
 import sqlite3
 import struct
@@ -30,13 +32,10 @@ import sqlite_vec
 from monibox_kb.config import settings
 from monibox_kb.paths import PROJECT_ROOT
 from monibox_kb.embedding import embed_texts
+from monibox_kb.scoring.rerank import RerankPolicy, final_distance
 
 
 def vec_to_f32_blob(vec: List[float]) -> sqlite3.Binary:
-    """
-    将 512维向量 list[float] 转成 float32 little-endian BLOB。
-    必须与入库时 vec0 接受的格式一致。
-    """
     floats = [float(x) for x in vec]
     blob = struct.pack("<%sf" % len(floats), *floats)
     return sqlite3.Binary(blob)
@@ -45,8 +44,6 @@ def vec_to_f32_blob(vec: List[float]) -> sqlite3.Binary:
 def open_db(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-
-    # sqlite-vec 扩展需要 enable_load_extension(True)
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)
@@ -62,33 +59,35 @@ def parse_csv(s: Optional[str]) -> List[str]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--q", required=True, help="查询文本")
-    parser.add_argument("--topk", type=int, default=5, help="返回条数（同时作为 vec0 的 k）")
+    parser.add_argument("--topk", type=int, default=5, help="返回条数")
     parser.add_argument("--dimension", default=None, help="限定维度（可选）")
-    parser.add_argument("--risk", default=None, help="限定风险等级，逗号分隔（可选）")
-    parser.add_argument("--tags", default=None, help="必须包含的标签ID，逗号分隔（可选）")
-    parser.add_argument("--status", default=None, help="限定状态，逗号分隔（可选），默认排除停用")
-
+    parser.add_argument("--risk", default=None, help="限定风险等级（可选，逗号分隔）")
+    parser.add_argument("--tags", default=None, help="必须包含的标签ID（可选，逗号分隔）")
+    parser.add_argument("--status", default=None, help="限定状态（可选，逗号分隔），默认排除停用")
+    parser.add_argument("--pool_mult", type=int, default=8, help="候选池倍率（用于重排），默认8")
     args = parser.parse_args()
 
+    policy = RerankPolicy.load_default()
+
     db_path = settings.rag_db_path
-    print("==== query_demo ====")
+    print("==== query_demo (rerank) ====")
     print("[info] project root:", PROJECT_ROOT)
     print("[info] db path:", db_path)
     print("[info] query:", args.q)
+    print("[info] policy:", policy)
     print()
 
-    # 1) embedding 查询
+    # 1) embedding
     qvec = embed_texts([args.q])[0]
     qblob = vec_to_f32_blob(qvec)
 
-    # 2) 连接 DB
+    # 2) open db
     conn = open_db(db_path)
 
-    # 3) 组装 SQL 过滤条件（作用在 chunks 表）
+    # 3) filters on chunks
     where = []
     params = {}
 
-    # 默认排除停用
     if args.status:
         statuses = parse_csv(args.status)
         keys = []
@@ -122,17 +121,23 @@ def main():
 
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
 
-    # 4) 关键：先在 vec_chunks 内做 KNN，并显式给 k
-    # 再 JOIN chunks 做过滤/展示
+    # 4) candidate pool
+    topk = int(args.topk)
+    k_pool = max(topk, topk * int(args.pool_mult))
+    # 防止太大（调试用）
+    k_pool = min(k_pool, 300)
+
     sql = f"""
     WITH knn AS (
       SELECT rowid, distance
       FROM vec_chunks
       WHERE embedding MATCH :qvec
-        AND k = :k
+        AND k = :kpool
     )
     SELECT
       c.chunk_id,
+      c.display_id,
+      c.group_id,
       c.text,
       c.dimension,
       c.risk,
@@ -144,29 +149,40 @@ def main():
     JOIN chunks c ON c.id = knn.rowid
     {where_sql}
     ORDER BY knn.distance
-    LIMIT :topk;
+    LIMIT :kpool;
     """
 
     params["qvec"] = qblob
-    params["k"] = int(args.topk)       # vec0 必需的 k
-    params["topk"] = int(args.topk)    # 输出条数（保持一致）
+    params["kpool"] = int(k_pool)
 
     rows = conn.execute(sql, params).fetchall()
     conn.close()
 
-    # 5) 输出结果
     if not rows:
         print("No results.")
         return
 
-    print(f"Top {len(rows)} results:")
-    for i, r in enumerate(rows, start=1):
+    # 5) rerank in python
+    scored = []
+    for r in rows:
+        d = float(r["distance"])
+        q = float(r["quality_score"])
+        st = r["status"]
+        d_final = final_distance(d, q, st, policy)
+        scored.append((d_final, r))
+
+    scored.sort(key=lambda x: x[0])
+    final = scored[:topk]
+
+    print(f"Candidates={len(rows)}  ReturnTopK={len(final)}")
+    for i, (d_final, r) in enumerate(final, start=1):
         text = r["text"]
         if len(text) > 120:
             text = text[:120] + "..."
         print(f"\n[{i}] chunk_id={r['chunk_id']}")
-        print(f"    distance={r['distance']:.6f}")
-        print(f"    dimension={r['dimension']}  risk={r['risk']}  status={r['status']}  source={r['source_id']}  score={r['quality_score']}")
+        print(f"    display_id={r['display_id']}  group_id={r['group_id']}")
+        print(f"    distance={float(r['distance']):.6f}  final_distance={d_final:.6f}  score={float(r['quality_score']):.1f}  status={r['status']}")
+        print(f"    dimension={r['dimension']}  risk={r['risk']}  source={r['source_id']}")
         print(f"    text={text}")
 
 

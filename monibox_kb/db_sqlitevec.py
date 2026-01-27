@@ -1,11 +1,9 @@
 """
-db_sqlitevec.py（最终稳健版：用 float32 BLOB 写入 vec0）
+db_sqlitevec.py（写入 display_id / group_id 版）
 
-解决的问题：
-1) Windows/Conda sqlite3 默认禁用扩展加载 -> enable_load_extension(True)
-2) 你的 sqlite_vec 包没有 serialize() -> 我们不用 serialize
-3) 避免依赖 vec_f32() 是否存在/命令行引号问题 -> 直接写 float32 BLOB
-4) rowid 强制 int，避免 numpy 类型导致 sqlite3 绑定失败
+- 启用 sqlite-vec 扩展加载
+- 写 chunks 元数据（包含 display_id/group_id）
+- 写 vec_chunks 向量（float32 BLOB）
 """
 
 import sqlite3
@@ -24,13 +22,8 @@ def flat_pipe(items: List[str]) -> str:
 
 
 def vec_to_f32_blob(vec: List[float]) -> sqlite3.Binary:
-    """
-    把 Python list[float] 转成 float32 little-endian 连续内存的 BLOB。
-    vec0 的 embedding 列底层就是吃这种格式（与 vec_f32() 的输出一致）。
-    """
-    # 强制转 float，避免 numpy.float32/Decimal 等导致 pack 出错
     floats = [float(x) for x in vec]
-    blob = struct.pack("<%sf" % len(floats), *floats)  # little-endian float32
+    blob = struct.pack("<%sf" % len(floats), *floats)
     return sqlite3.Binary(blob)
 
 
@@ -41,11 +34,9 @@ class RagDB:
 
     def connect(self) -> sqlite3.Connection:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
 
-        # 允许加载扩展（否则 not authorized）
         conn.enable_load_extension(True)
         try:
             sqlite_vec.load(conn)
@@ -66,33 +57,40 @@ class RagDB:
             cur = conn.cursor()
 
             for r, v in zip(records, vectors):
-                # 1) 写 chunks 元数据
+                # 注意：display_id / group_id 可能缺失，允许为 None
                 cur.execute(
                     """
                     INSERT INTO chunks(
-                      chunk_id, text, dimension, topic, risk,
+                      chunk_id, display_id, group_id,
+                      text, dimension, topic, risk,
                       source_id, status, quality_score, fingerprint,
-                      tts_ok, tts_style, tags_flat, populations_flat
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      tts_ok, tts_style,
+                      tags_flat, populations_flat
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         r["片段ID"],
+                        r.get("显示ID"),
+                        r.get("片段组ID"),
+
                         r["文本"],
                         r["维度"],
                         r.get("子主题"),
                         r["风险等级"],
+
                         r["来源ID"],
                         r["状态"],
                         float(r.get("人工评分", 0)),
                         r["内容指纹"],
+
                         1 if r.get("可直接播报", True) else 0,
                         r.get("播报风格"),
+
                         flat_pipe(r.get("标签", [])),
                         flat_pipe(r.get("适用人群", [])),
                     )
                 )
 
-                # 2) 写 vec_chunks 向量（BLOB）
                 rowid = int(cur.lastrowid)
                 blob = vec_to_f32_blob(v)
 
