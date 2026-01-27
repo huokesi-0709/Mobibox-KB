@@ -60,6 +60,7 @@ def main():
     batch_size = 12
     max_batches = 20
 
+
     out_list = []
     seen_fp = set()
 
