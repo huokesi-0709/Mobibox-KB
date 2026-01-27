@@ -93,6 +93,7 @@ def main():
     print("[info] runtime pack path:", settings.runtime_pack_path)
     print()
 
+
     chunks_path = GEN / "12_chunks_synth.json"
     if not chunks_path.exists():
         raise FileNotFoundError(
@@ -148,7 +149,7 @@ def main():
     out_pack.write_text(json.dumps(runtime_pack, ensure_ascii=False, indent=2), encoding="utf-8")
     print("      runtime_pack saved:", out_pack)
 
-    print("[8/8] 数据库统计信息 ...")
+    print("[8/8] 数据库统计信息  ...")
     size = db_path.stat().st_size if db_path.exists() else 0
     print("      rag.db:", db_path)
     print("      size:", human_bytes(size))
