@@ -1,0 +1,58 @@
+{
+  "version": "1.1",
+  "protocols": [
+    {
+      "protocol_id": "prot_aftershock_immediate",
+      "name": "余震-立即避险提示",
+      "priority": 100,
+      "trigger": {
+        "any_of": [
+          { "event": "imu_strong_shake" },
+          { "text_contains_any": ["余震", "又在晃", "又震了", "又摇", "塌了", "裂了"] }
+        ]
+      },
+      "actions": [
+        { "type": "tts", "style": "urgent_calm", "text": "有余震。先护住头部和颈部，把手臂挡在头侧。不要用力挣扎，避免二次塌落。你能移动吗？" },
+        { "type": "led", "pattern": { "mode": "pulse", "rgb": [255, 80, 0], "hz": 1.2, "ms": 3500 } },
+        { "type": "screen", "text": "护头  慢呼吸", "ms": 3500 }
+      ]
+    },
+
+    {
+      "protocol_id": "prot_airway_dust",
+      "name": "粉尘/气道风险-优先保护气道",
+      "priority": 90,
+      "trigger": {
+        "any_of": [
+          { "tags_any": ["env_dust_concentration", "med_medical_airway_obstruction", "med_medical_respiratory_distress"] },
+          { "text_contains_any": ["粉尘", "灰", "呛", "咳", "咳嗽", "嗓子痛"] }
+        ]
+      },
+      "actions": [
+        { "type": "tts", "style": "urgent_calm", "text": "先保护气道。用衣物或布料捂住口鼻，尽量小口慢慢呼吸。减少说话和大幅活动来节省氧气。你现在能闻到刺激性气味吗？" },
+        { "type": "led", "pattern": { "mode": "pulse", "rgb": [120, 200, 255], "hz": 1.0, "ms": 3500 } },
+        { "type": "screen", "text": "捂口鼻  小口慢呼吸", "ms": 3500 }
+      ]
+    },
+
+    {
+      "protocol_id": "prot_panic_breathing",
+      "name": "恐慌/过度换气-呼吸节奏引导",
+      "priority": 80,
+      "trigger": {
+        "any_of": [
+          { "tags_any": ["psy_psychological_panic_attack", "med_medical_hyperventilation"] },
+          { "text_contains_any": ["我好怕", "我很害怕", "要失控", "心跳好快", "恐慌"] }
+        ],
+        "none_of": [
+          { "tags_any": ["env_dust_concentration", "med_medical_airway_obstruction", "med_medical_respiratory_distress"] },
+          { "text_contains_any": ["粉尘", "灰", "呛", "咳", "咳嗽"] }
+        ]
+      },
+      "actions": [
+        { "type": "tts", "style": "calm_clear", "text": "跟我一起：用鼻子吸气数3拍，再慢慢呼气数6拍。我们重复5次。你做得到的。" },
+        { "type": "led", "pattern": { "mode": "breath", "rgb": [80, 160, 255], "inhale_ms": 3000, "exhale_ms": 6000, "cycles": 5 } }
+      ]
+    }
+  ]
+}

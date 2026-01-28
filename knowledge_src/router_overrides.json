@@ -1,0 +1,59 @@
+{
+  "version": "1.1",
+  "rules": [
+    {
+      "name": "panic_core",
+      "patterns": ["害怕", "恐慌", "慌", "心跳快", "要失控", "发抖", "手脚发麻"],
+      "boost_tags": {
+        "psy_psychological_panic_attack": 1.6,
+        "med_medical_hyperventilation": 1.2
+      },
+      "force_tags": []
+    },
+    {
+      "name": "breath_distress",
+      "patterns": ["喘不过气", "喘不上气", "呼吸困难", "胸闷", "憋得慌", "气短", "上不来气", "透不过气"],
+      "boost_tags": {
+        "med_medical_respiratory_distress": 1.6,
+        "med_medical_hyperventilation": 1.2,
+        "env_oxygen_level_low": 1.2,
+        "env_oxygen_deficiency": 1.2,
+        "med_medical_airway_obstruction": 1.0
+      },
+      "force_tags": []
+    },
+    {
+      "name": "dust_cough",
+      "patterns": ["粉尘", "灰", "呛", "咳", "咳嗽", "嗓子痛", "呼吸道", "鼻子堵"],
+      "boost_tags": {
+        "env_dust_concentration": 2.0,
+        "med_medical_airway_obstruction": 1.6,
+        "med_medical_respiratory_distress": 1.2
+      },
+      "force_tags": []
+    },
+    {
+      "name": "oxygen_hint",
+      "patterns": ["头晕", "发黑", "眼前一黑", "要晕了", "意识模糊", "嗜睡", "反应慢", "乏力"],
+      "boost_tags": {
+        "env_oxygen_deficiency": 1.8,
+        "env_oxygen_level_low": 1.5
+      },
+      "force_tags": []
+    },
+    {
+      "name": "aftershock",
+      "patterns": ["又在晃", "又震了", "余震", "又摇", "塌了", "裂了"],
+      "boost_tags": {
+        "sec_secondary_hazard_aftershock": 1.8,
+        "env_structural_instability": 1.2,
+        "env_vibration_continuous": 1.0
+      },
+      "force_tags": []
+    }
+  ],
+  "notes": [
+    "更细化的分流：恐慌/过度换气/缺氧/粉尘",
+    "如某个标签还没进库，会被 router 自动忽略（TagRegistry 会 canonicalize 并校验）"
+  ]
+}

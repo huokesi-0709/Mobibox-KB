@@ -6,6 +6,10 @@ __pycache__/
 .idea/
 .vscode/
 knowledge_src/generated/
-models/embedding/
+
+models
+
+
+
 
 

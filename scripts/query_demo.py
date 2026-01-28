@@ -1,7 +1,8 @@
 import argparse
 import sqlite3
 import struct
-from typing import List, Optional
+from typing import List, Optional, Dict
+from collections import Counter
 
 import sqlite_vec
 
@@ -33,56 +34,92 @@ def parse_csv(s: Optional[str]) -> List[str]:
     return [x.strip() for x in s.split(",") if x.strip()]
 
 
+def diversify_by_group(scored_rows, topk: int, max_per_group: int = 1):
+    """
+    scored_rows: List[(final_distance, sqlite_row)]
+    按 final_distance 排好序后，限制每个 group_id 最多出现 max_per_group 次。
+    """
+    picked = []
+    group_cnt = Counter()
+
+    for d_final, r in scored_rows:
+        gid = r["group_id"] or ""
+        if gid and group_cnt[gid] >= max_per_group:
+            continue
+        picked.append((d_final, r))
+        if gid:
+            group_cnt[gid] += 1
+        if len(picked) >= topk:
+            break
+
+    # 如果去重后不够 topk，就补齐（忽略 group 限制）
+    if len(picked) < topk:
+        exists = set((r["chunk_id"] for _, r in picked))
+        for d_final, r in scored_rows:
+            if r["chunk_id"] in exists:
+                continue
+            picked.append((d_final, r))
+            if len(picked) >= topk:
+                break
+
+    return picked
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--q", required=True, help="查询文本")
     parser.add_argument("--topk", type=int, default=5, help="返回条数")
     parser.add_argument("--dimension", default=None, help="限定维度（可选）")
     parser.add_argument("--risk", default=None, help="限定风险等级（可选，逗号分隔）")
-    parser.add_argument("--tags", default=None, help="必须包含的标签ID（可选，逗号分隔）")
+    parser.add_argument("--tags", default=None, help="限定标签（可选，逗号分隔）")
     parser.add_argument("--status", default=None, help="限定状态（可选，逗号分隔），默认排除停用")
     parser.add_argument("--pool_mult", type=int, default=8, help="候选池倍率（默认8，用于评分重排）")
 
-    # 新增：自动路由
     parser.add_argument("--auto_route", action="store_true", help="自动推断 dimension/tags（若未手动指定）")
-    parser.add_argument("--auto_top_tags", type=int, default=1, help="自动路由选取的标签数量（默认1）")
+    parser.add_argument("--auto_top_tags", type=int, default=1, help="自动路由选取标签数量（默认1）")
 
+    # 新增：多样性控制
+    parser.add_argument("--max_per_group", type=int, default=1, help="同一 group_id 最多返回几条（默认1）")
     args = parser.parse_args()
 
     policy = RerankPolicy.load_default()
 
     db_path = settings.rag_db_path
-    print("==== query_demo (rerank + auto_route) ====")
+    print("==== query_demo (rerank + auto_route + diversify) ====")
     print("[info] project root:", PROJECT_ROOT)
     print("[info] db path:", db_path)
     print("[info] query:", args.q)
     print("[info] policy:", policy)
     print()
 
-    # 1) auto route（仅当用户没手动指定 dimension/tags 时）
-    if args.auto_route and (args.dimension is None or args.tags is None):
+    if args.auto_route and (args.tags is None or args.dimension is None):
         router = AutoRouter()
         rr = router.route(args.q, top_tags=args.auto_top_tags)
+
         print("[route] predicted dimension:", rr.dimension)
         print("[route] predicted tags:", rr.tags)
+        print("[route] tag_dims:", rr.tag_dims)
+        print("[route] cross_dimension:", rr.cross_dimension)
         print("[route] evidence:", rr.evidence)
         print()
 
-        if args.dimension is None:
-            args.dimension = rr.dimension
         if args.tags is None and rr.tags:
-            # 只用路由出的标签做过滤
             args.tags = ",".join(rr.tags)
 
-    # 2) embedding
+        if args.dimension is None:
+            if rr.cross_dimension:
+                print("[route] cross-dimension detected -> UNLOCK dimension filter (dimension=None)\n")
+                args.dimension = None
+            else:
+                args.dimension = rr.dimension
+
     qvec = embed_texts([args.q])[0]
     qblob = vec_to_f32_blob(qvec)
 
-    # 3) open db
     conn = open_db(db_path)
 
     where = []
-    params = {}
+    params: Dict[str, object] = {}
 
     if args.status:
         statuses = parse_csv(args.status)
@@ -108,7 +145,7 @@ def main():
             keys.append(f":{k}")
         where.append(f"c.risk IN ({','.join(keys)})")
 
-    # 注意：这里 tags 用 OR 逻辑（任意命中一个标签即可），更适合路由结果
+    # tags OR
     if args.tags:
         tags = parse_csv(args.tags)
         ors = []
@@ -168,9 +205,11 @@ def main():
         scored.append((d_final, r))
 
     scored.sort(key=lambda x: x[0])
-    final = scored[:topk]
 
-    print(f"Candidates={len(rows)}  ReturnTopK={len(final)}")
+    # diversify by group_id
+    final = diversify_by_group(scored, topk=topk, max_per_group=max(1, int(args.max_per_group)))
+
+    print(f"Candidates={len(rows)}  ReturnTopK={len(final)}  max_per_group={args.max_per_group}")
     for i, (d_final, r) in enumerate(final, start=1):
         text = r["text"]
         if len(text) > 120:
