@@ -198,8 +198,8 @@ python -m scripts.query_demo --q "我好害怕，喘不过气" --topk 5
 
 ### 5.1 打分/启用/停用
 ```bash
-python -m scripts.rate_chunk --display_id "<显示ID>" --score 5 --status 启用
-python -m scripts.rate_chunk --display_id "<显示ID>" --status 停用
+python -m scripts.rate_chunk --display_id "" --score 5 --status 启用
+python -m scripts.rate_chunk --display_id "" --status 停用
 ```
 
 ### 5.2 再查询（排序会受评分影响）
@@ -213,3 +213,73 @@ python -m scripts.query_demo --q "我好害怕，喘不过气" --topk 5
 ---
 
 。
+
+huokesi-0709/Mobibox-KB
+docs/01_knowledgebase_roadmap.md
+
+
+
+## 0. 核心目标（灾害场景的“离线、可控、可执行”知识系统）
+MoniBox 的知识库不是“百科问答”，而是面向地震受困人群的：
+1) **安全优先**：不做诊断、不提供危险处置、可降级
+2) **低延迟**：TTS 秒级响应，优先短句与可执行指令
+3) **强可控**：高风险场景走协议/规则，不把生死交给 LLM 幻觉
+4) **可追溯与可迭代**：每条回答可追踪来源、可调权、可替换、可禁用
+5) **多模态融合**：传感器事件（余震/跌落/紧握）能直接触发“行为协议”
+---
+
+## 1. 知识资产分层（从“文本”进化到“可执行系统”）
+
+
+
+---
+### 2.3 测试与评分（Evaluation）
+每次对话输出记录：
+- 命中片段ID、来源ID、相似度、最终排序因子
+测试人员可给：
+- 片段评分（0~5）
+- 标记“危险/无效/重复/很好”
+系统据此：
+- 动态提权或停用
+- 形成“优质回答优先命中但不重复”的稳定体验
+---
+
+## 3. 最终到达的成熟形态（终局图景）
+
+
+huokesi-0709/Mobibox-KB
+monibox_kb/tags/registry.py
+
+
+    return s
+
+@dataclass
+class TagRegistry:
+    """
+    标签注册表（标签收敛核心）
+    - allowed_ids: 允许使用的标准 tag_id 集合（来自 meta + normalized taxonomy）
+    - name_to_id: 中文名称 -> 标准 tag_id（轻度纠错）
+    - alias_map : 旧tag -> [标准tag候选列表]（收敛遗留标签）
+    """
+    allowed_ids: Set[str]
+    name_to_id: Dict[str, str]
+    alias_map: Dict[str, List[str]]
+    @staticmethod
+    def load(
+        meta_path: Optional[Path] = None,
+
+
+huokesi-0709/Mobibox-KB
+scripts/build_pack.py
+
+
+    vec_dim = len(vectors[0]) if vectors else 0
+    print(f"      embedding done. vectors={len(vectors)} dim={vec_dim}")
+    print("[6/8] 创建/初始化数据库并写入 ...")
+    db = RagDB(settings.rag_db_path)
+    db.create_tables()
+    db.insert_chunks(chunks, vectors)
+    print("      db insert done.")
+
+    print("[7/8] 生成 runtime_pack.json ...")
+    meta = load_json(SRC / "00_meta.json")
